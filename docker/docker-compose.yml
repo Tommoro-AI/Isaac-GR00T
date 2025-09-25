@@ -1,0 +1,28 @@
+services:
+  groot:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: groot15:latest    
+    container_name: groot15
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+    shm_size: "16g"
+    ipc: host
+    network_mode: host
+    environment:
+      - TZ=Asia/Seoul
+      - PYTHONPATH=/workspace
+      - HF_HOME=/root/.cache/huggingface
+      - WANDB_MODE=offline
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - ..:/workspace
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    tty: true
+    stdin_open: true
+    command: ["bash","-lc","sleep infinity"]  

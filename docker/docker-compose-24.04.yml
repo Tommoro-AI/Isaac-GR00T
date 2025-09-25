@@ -1,0 +1,32 @@
+services:
+  groot:
+    build:
+      context: ..
+      dockerfile: docker/ubuntu2404.Dockerfile
+      args:
+        CUDA_TAG: ${CUDA_TAG:-12.5.1-devel-ubuntu24.04}
+    container_name: groot15
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+    shm_size: "16g"
+    ipc: host
+    network_mode: host
+    environment:
+      - TZ=Asia/Seoul
+      - PYTHONPATH=/workspace
+      - HF_HOME=/root/.cache/huggingface
+      - WANDB_MODE=offline
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CYCLONEDDS_URI=file:///etc/cyclonedds/cyclonedds.xml
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    volumes:
+      - ..:/workspace
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      - ../cyclonedds.xml:/etc/cyclonedds/cyclonedds.xml:ro 
+    tty: true
+    stdin_open: true
+    command: ["bash","-lc","sleep infinity"]
