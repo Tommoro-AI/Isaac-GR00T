@@ -47,7 +47,8 @@ while true; do
           echo "➡️  Leaving it running."
         fi
       else
-        docker compose -f "${DOCKER_COMPOSE_FILE}" up -d
+        docker compose -f "${DOCKER_COMPOSE_FILE}" build
+        docker compose -f "${DOCKER_COMPOSE_FILE}" up -d --remove-orphans
       fi
       ;;
     2) docker exec -it "${CONTAINER_NAME}" bash ;;
