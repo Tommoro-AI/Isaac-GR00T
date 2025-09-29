@@ -1,0 +1,60 @@
+{
+  "state": {
+    "arm_l_joints": {
+      "start": 0,
+      "end": 7,
+      "rotation_type": "radian",
+      "dtype": "float32",
+      "range": [-3.141593, 3.316126]
+    },
+    "gripper_l": {
+      "start": 7,
+      "end": 8,
+      "dtype": "float32",
+      "range": [0.0, 107.6]
+    },
+    "arm_r_joints": {
+      "start": 8,
+      "end": 15,
+      "rotation_type": "radian",
+      "dtype": "float32",
+      "range": [-3.316126, 3.141593]
+    },
+    "gripper_r": {
+      "start": 15,
+      "end": 16,
+      "dtype": "float32",
+      "range": [0.0, 107.6]
+    },
+    "head": {
+      "start": 16,
+      "end": 18,
+      "rotation_type": "radian",
+      "dtype": "float32",
+      "range": [-0.872665, 0.523599]
+    },
+    "lift": {
+      "start": 18,
+      "end": 19,
+      "dtype": "float32",
+      "range": [0.0, 500.0]
+    }
+  },
+  "action": {
+    "arm_l_joints": { "start": 0, "end": 7, "absolute": true, "dtype": "float32" },
+    "gripper_l":    { "start": 7, "end": 8, "absolute": true, "dtype": "float32" },
+    "arm_r_joints": { "start": 8, "end": 15, "absolute": true, "dtype": "float32" },
+    "gripper_r":    { "start": 15, "end": 16, "absolute": true, "dtype": "float32" },
+    "head":         { "start": 16, "end": 18, "absolute": true, "dtype": "float32" },
+    "lift":         { "start": 18, "end": 19, "absolute": true, "dtype": "float32" }
+  },
+  "video": {
+    "cam_head":       { "original_key": "observation.images.cam_head" },
+    "cam_wrist_left": { "original_key": "observation.images.cam_wrist_left" },
+    "cam_wrist_right":{ "original_key": "observation.images.cam_wrist_right" }
+  },
+  "annotation": {
+    "human.action.task_description": {},
+    "human.validity": {}
+  }
+}

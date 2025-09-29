@@ -66,10 +66,16 @@ def _make_obs_droid() -> Dict[str, Any]:
 
 # --------- PROFILE MAP ---------
 PROFILES = {
-    "gr1": {
-        "model_path": "nvidia/GR00T-N1.5-3B",
-        "embodiment_tag": "gr1",
-        "data_config": "fourier_gr1_arms_waist",
+    #"gr1": {
+    #    "model_path": "nvidia/GR00T-N1.5-3B",
+    #    "embodiment_tag": "gr1",
+    #    "data_config": "fourier_gr1_arms_waist",
+    #    "obs_fn": _make_obs_gr1,
+    #},
+    "gr1": { # fine tuned model
+        "model_path": "/workspace/out/smoke1/checkpoint-100",
+        "embodiment_tag": "new_embodiment",
+        "data_config": "fourier_gr1_arms_only",
         "obs_fn": _make_obs_gr1,
     },
     "genie": {  # agibot_genie1

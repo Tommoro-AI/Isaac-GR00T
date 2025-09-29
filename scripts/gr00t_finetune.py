@@ -24,7 +24,7 @@ import torch
 import tyro
 from transformers import TrainingArguments
 
-from gr00t.data.dataset import LeRobotMixtureDataset, LeRobotSingleDataset
+from gr00t.data.dataset import LeRobotMixtureDataset, LeRobotSingleDataset, CachedLeRobotSingleDataset
 from gr00t.data.schema import EmbodimentTag
 from gr00t.experiment.data_config import load_data_config
 from gr00t.experiment.runner import TrainRunner
@@ -256,7 +256,7 @@ def main(config: ArgsConfig):
         run_name=None,
         remove_unused_columns=False,
         deepspeed="",
-        gradient_checkpointing=False,
+        gradient_checkpointing=True,
         bf16=True,
         tf32=True,
         per_device_train_batch_size=config.batch_size,

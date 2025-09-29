@@ -19,6 +19,7 @@ import albumentations as A
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchvision.transforms.v2 as T
 from einops import rearrange
 from pydantic import Field, PrivateAttr, field_validator
@@ -37,6 +38,7 @@ class VideoTransform(ModalityTransform):
     _train_transform: Callable | None = PrivateAttr(default=None)
     _eval_transform: Callable | None = PrivateAttr(default=None)
     _original_resolutions: dict[str, tuple[int, int]] = PrivateAttr(default_factory=dict)
+    _pad_target_hw: tuple[int, int] | None = PrivateAttr(default=None)  # (H, W)
 
     # Model constants
     _INTERPOLATION_MAP: ClassVar[dict[str, dict[str, Any]]] = PrivateAttr(
@@ -139,6 +141,13 @@ class VideoTransform(ModalityTransform):
                 raise ValueError(
                     f"Video key {sub_key} not found in dataset metadata. Available keys: {dataset_metadata.modalities.video.keys()}"
                 )
+        sizes = list(self.original_resolutions.values())  # [(W,H), ...]
+        if len(set(sizes)) != 1:
+            max_w = max(w for (w, h) in sizes)
+            max_h = max(h for (w, h) in sizes)
+            self._pad_target_hw = (max_h, max_w)  # (H,W)
+        else:
+            self._pad_target_hw = None
         train_transform = self.get_transform(mode="train")
         eval_transform = self.get_transform(mode="eval")
         if self.backend == "albumentations":
@@ -172,6 +181,47 @@ class VideoTransform(ModalityTransform):
         num_views = len(views)
         is_batched = views[0].ndim == 5
         bs = views[0].shape[0] if is_batched else 1
+
+        # >>>>>> NEW <<<<<<
+        if self._pad_target_hw is not None:
+            target_h, target_w = self._pad_target_hw
+            if isinstance(views[0], np.ndarray):
+                padded = []
+                for v in views:
+                    if v.ndim == 4:        # [T, H, W, C]
+                        Tt, Hh, Ww, Cc = v.shape
+                        pad_h = max(target_h - Hh, 0)
+                        pad_w = max(target_w - Ww, 0)
+                        if pad_h or pad_w:
+                            v = np.pad(v, ((0,0),(0,pad_h),(0,pad_w),(0,0)), mode="constant", constant_values=0)
+                    elif v.ndim == 5:      # [B, T, H, W, C]
+                        Bb, Tt, Hh, Ww, Cc = v.shape
+                        pad_h = max(target_h - Hh, 0)
+                        pad_w = max(target_w - Ww, 0)
+                        if pad_h or pad_w:
+                            v = np.pad(v, ((0,0),(0,0),(0,pad_h),(0,pad_w),(0,0)), mode="constant", constant_values=0)
+                    padded.append(v)
+                views = padded
+
+            elif isinstance(views[0], torch.Tensor):
+                padded = []
+                for v in views:
+                    if v.ndim == 4:        # [T, C, H, W]
+                        _, _, Hh, Ww = v.shape
+                        pad_h = max(target_h - Hh, 0)
+                        pad_w = max(target_w - Ww, 0)
+                        if pad_h or pad_w:
+                            v = F.pad(v, (0, pad_w, 0, pad_h), value=0)  # (left,right,top,bottom)
+                    elif v.ndim == 5:      # [B, T, C, H, W]
+                        _, _, _, Hh, Ww = v.shape
+                        pad_h = max(target_h - Hh, 0)
+                        pad_w = max(target_w - Ww, 0)
+                        if pad_h or pad_w:
+                            # pad solo en las dos últimas dims
+                            v = F.pad(v.flatten(0,1), (0, pad_w, 0, pad_h), value=0).unflatten(0, (v.shape[0], v.shape[1]))
+                    padded.append(v)
+                views = padded
+        # <<<<<< END NEW >>>>>>
         if isinstance(views[0], torch.Tensor):
             views = torch.cat(views, 0)
         elif isinstance(views[0], np.ndarray):
@@ -239,6 +289,45 @@ class VideoTransform(ModalityTransform):
             "set_transform is not implemented for VideoTransform. Please implement this function to set the transforms."
         )
 
+class VideoPadIfNeeded(VideoTransform):
+    fill_value: int = Field(default=0, description="Padding value (0 = negro)")
+
+    def get_transform(self, mode: Literal["train", "eval"] = "train") -> Callable | None:
+        sizes = list(self.original_resolutions.values())
+        if len(set(sizes)) == 1:
+            # No hace falta padding
+            return lambda x: x
+
+        target_w = max(w for (w, h) in sizes)
+        target_h = max(h for (w, h) in sizes)
+
+        if self.backend == "torchvision":
+            def pad_batch(batch: torch.Tensor) -> torch.Tensor:
+                # batch: [N, C, H, W]
+                padded = []
+                for img in batch:
+                    _, h, w = img.shape
+                    pad_w = target_w - w
+                    pad_h = target_h - h
+                    if pad_w <= 0 and pad_h <= 0:
+                        padded.append(img)
+                        continue
+                    # pad = (left, right, top, bottom) → rellenamos a derecha y abajo
+                    pad_tuple = (0, max(pad_w, 0), 0, max(pad_h, 0))
+                    padded.append(torch.nn.functional.pad(img, pad_tuple, value=self.fill_value))
+                return torch.stack(padded, 0)
+            return pad_batch
+
+        elif self.backend == "albumentations":
+            return A.PadIfNeeded(
+                min_height=target_h,
+                min_width=target_w,
+                border_mode=cv2.BORDER_CONSTANT,
+                value=self.fill_value,
+                p=1,
+            )
+        else:
+            raise ValueError(f"Backend {self.backend} not supported")
 
 class VideoCrop(VideoTransform):
     height: int | None = Field(default=None, description="The height of the input image")
@@ -258,9 +347,10 @@ class VideoCrop(VideoTransform):
             Callable: If mode is "train", return a random crop transform. If mode is "eval", return a center crop transform.
         """
         # 1. Check the input resolution
-        assert (
-            len(set(self.original_resolutions.values())) == 1
-        ), f"All video keys must have the same resolution, got: {self.original_resolutions}"
+        ### COMMENTED
+        #assert (
+        #    len(set(self.original_resolutions.values())) == 1
+        #), f"All video keys must have the same resolution, got: {self.original_resolutions}"
         if self.height is None:
             assert self.width is None, "Height and width must be either both provided or both None"
             self.width, self.height = self.original_resolutions[self.apply_to[0]]
@@ -289,6 +379,8 @@ class VideoCrop(VideoTransform):
 
     def check_input(self, data: dict[str, Any]):
         super().check_input(data)
+        if getattr(self, "_pad_target_hw", None) is not None:
+            return
         # Check the input resolution
         for key in self.apply_to:
             if self.backend == "torchvision":

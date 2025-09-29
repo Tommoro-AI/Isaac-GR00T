@@ -33,7 +33,8 @@ from gr00t.data.transform.video import (
     VideoToTensor,
 )
 from gr00t.model.transforms import GR00TTransform
-
+from gr00t.data.transform import ComposedModalityTransform, StateActionTransform
+from gr00t.data.transform.video import VideoPadIfNeeded
 
 @dataclass
 class BaseDataConfig(ABC):
@@ -169,6 +170,7 @@ class FourierGr1ArmsOnlyDataConfig(BaseDataConfig):
         transforms = [
             # video transforms
             VideoToTensor(apply_to=self.video_keys),
+            VideoPadIfNeeded(apply_to=self.video_keys),
             VideoCrop(apply_to=self.video_keys, scale=0.95),
             VideoResize(apply_to=self.video_keys, height=224, width=224, interpolation="linear"),
             VideoColorJitter(
@@ -769,6 +771,101 @@ class AgibotGenie1DataConfig(BaseDataConfig):
 
         return ComposedModalityTransform(transforms=transforms)
 
+class AIWorkerDualWristHeadDataConfig(BaseDataConfig):
+    # three cameras from your dataset
+    video_keys = ["video.cam_head", "video.cam_wrist_left", "video.cam_wrist_right"]
+    # 19-dim state split you defined
+    state_keys = [
+        "state.arm_l_joints",
+        "state.gripper_l",
+        "state.arm_r_joints",
+        "state.gripper_r",
+        "state.head",
+        "state.lift",
+    ]
+    action_keys = [
+        "action.arm_l_joints",
+        "action.gripper_l",
+        "action.arm_r_joints",
+        "action.gripper_r",
+        "action.head",
+        "action.lift",
+    ]
+    # no language/annotation keys (optional)
+    language_keys = []
+
+    # per-modality horizons
+    observation_indices = [0]  # for state
+    action_indices = [0]       # for action
+    _video_indices = [-12, -8, -4, 0]  # ~0.4s of history at 30 fps
+
+    def modality_config(self) -> dict[str, ModalityConfig]:
+        # override to allow a different horizon for video vs state/action
+        return {
+            "video": ModalityConfig(
+                delta_indices=self._video_indices,
+                modality_keys=self.video_keys,
+            ),
+            "state": ModalityConfig(
+                delta_indices=self.observation_indices,
+                modality_keys=self.state_keys,
+            ),
+            "action": ModalityConfig(
+                delta_indices=self.action_indices,
+                modality_keys=self.action_keys,
+            ),
+            "language": ModalityConfig(
+                delta_indices=self.observation_indices,
+                modality_keys=self.language_keys,
+            ),
+        }
+
+    def transform(self) -> ModalityTransform:
+        transforms = [
+            # video transforms
+            VideoToTensor(apply_to=self.video_keys),
+            VideoCrop(apply_to=self.video_keys, scale=0.95),
+            VideoResize(apply_to=self.video_keys, height=224, width=224, interpolation="linear"),
+            VideoColorJitter(
+                apply_to=self.video_keys,
+                brightness=0.3,
+                contrast=0.4,
+                saturation=0.5,
+                hue=0.08,
+            ),
+            VideoToNumpy(apply_to=self.video_keys),
+
+            # state transforms
+            StateActionToTensor(apply_to=self.state_keys),
+            StateActionTransform(
+                apply_to=self.state_keys,
+                normalization_modes={k: "min_max" for k in self.state_keys},
+            ),
+
+            # action transforms
+            StateActionToTensor(apply_to=self.action_keys),
+            StateActionTransform(
+                apply_to=self.action_keys,
+                normalization_modes={k: "min_max" for k in self.action_keys},
+            ),
+
+            # concat transforms (order matters)
+            ConcatTransform(
+                video_concat_order=self.video_keys,
+                state_concat_order=self.state_keys,
+                action_concat_order=self.action_keys,
+            ),
+
+            # model-specific packing
+            GR00TTransform(
+                state_horizon=len(self.observation_indices),
+                action_horizon=len(self.action_indices),
+                max_state_dim=64,
+                max_action_dim=32,
+            ),
+        ]
+        return ComposedModalityTransform(transforms=transforms)
+
 
 ###########################################################################################
 
@@ -785,4 +882,5 @@ DATA_CONFIG_MAP = {
     "unitree_g1_full_body": UnitreeG1FullBodyDataConfig(),
     "oxe_droid": OxeDroidDataConfig(),
     "agibot_genie1": AgibotGenie1DataConfig(),
+    "aiworker_dual_wrist_head": AIWorkerDualWristHeadDataConfig(),
 }

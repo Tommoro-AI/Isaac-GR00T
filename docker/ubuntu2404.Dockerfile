@@ -84,4 +84,9 @@ RUN pip install --no-cache-dir --ignore-installed kiwisolver==1.4.7 && \
       transformers==4.51.3 tyro dm-tree==0.1.8 \
       h5py==3.12.1 matplotlib==3.10.0 pandas==2.2.3 protobuf==3.20.3 \
       pydantic==2.10.6 requests==2.32.3 typing_extensions==4.12.2 \
-      imageio-ffmpeg==0.4.9
+      imageio-ffmpeg==0.4.9 tf-keras
+
+RUN pip uninstall -y wandb
+RUN pip install --upgrade pip setuptools wheel
+RUN pip install --upgrade "protobuf>=4.25" "wandb>=0.17.0"
+RUN pip install --no-cache-dir "protobuf<5,>=3.20.3"

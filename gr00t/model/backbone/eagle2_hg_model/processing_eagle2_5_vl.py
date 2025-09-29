@@ -43,9 +43,13 @@ logger = logging.get_logger(__name__)
 
 
 FRAME_FACTOR = 2
-FPS = 2.0
-FPS_MIN_FRAMES = 4
-FPS_MAX_FRAMES = 256
+#FPS = 2.0
+#FPS_MIN_FRAMES = 4
+#FPS_MAX_FRAMES = 256
+FPS = 0.25
+FPS_MIN_FRAMES = 2
+FPS_MAX_FRAMES = 4
+MAX_VISION_TOKENS = 2048  # Eagle2_5_VL can handle up to 2048 vision tokens
 
 
 def adjust_by_factor(
@@ -262,12 +266,17 @@ def fetch_video(
 
 class Eagle2_5_VLProcessorKwargs(ProcessingKwargs, total=False):
     # see processing_utils.ProcessingKwargs documentation for usage.
+    #_defaults = {
+    #    "text_kwargs": {
+    #        "padding": False,
+    #    },
+    #    "images_kwargs": {},
+    #    "videos_kwargs": {"max_dynamic_tiles": 1},
+    #}
     _defaults = {
-        "text_kwargs": {
-            "padding": False,
-        },
-        "images_kwargs": {},
-        "videos_kwargs": {"max_dynamic_tiles": 1},
+        "text_kwargs": {"padding": False},
+        "images_kwargs": {"min_dynamic_tiles": 1, "max_dynamic_tiles": 1, "use_thumbnail": False},
+        "videos_kwargs": {"min_dynamic_tiles": 1, "max_dynamic_tiles": 1, "use_thumbnail": False},
     }
 
 
@@ -350,6 +359,24 @@ class Eagle2_5_VLProcessor(ProcessorMixin):
         if "auto_map" in kwargs:
             self.auto_map = kwargs["auto_map"]
         super().__init__(image_processor, tokenizer, chat_template=chat_template)
+        # Keep tokenizer safe but DO NOT change tokens-per-tile (must stay 256 to match the model)
+        if hasattr(self.tokenizer, "truncation_side"):
+            self.tokenizer.truncation_side = "left"
+        if not getattr(self.tokenizer, "model_max_length", None):
+            self.tokenizer.model_max_length = 16384
+
+        # Reduce vision tile size and disable dynamic tiling at the processor level too
+        try:
+            if hasattr(self.image_processor, "size"):
+                self.image_processor.size = {"height": 224, "width": 224}
+            if hasattr(self.image_processor, "min_dynamic_tiles"):
+                self.image_processor.min_dynamic_tiles = 1
+            if hasattr(self.image_processor, "max_dynamic_tiles"):
+                self.image_processor.max_dynamic_tiles = 1
+            if hasattr(self.image_processor, "use_thumbnail"):
+                self.image_processor.use_thumbnail = False
+        except Exception:
+            pass
 
     def replace_media_placeholder(
         self, text, image_list, video_list, timestamps_list, fps_list, **output_kwargs
@@ -411,7 +438,14 @@ class Eagle2_5_VLProcessor(ProcessorMixin):
                         **output_kwargs["images_kwargs"],
                     )
                     num_all_tiles = image_inputs["pixel_values"].shape[0]
-                    special_placeholder = f"<image {idx_in_list+1}>{self.image_start_token}{self.image_token * num_all_tiles * self.tokens_per_tile}{self.image_end_token}"
+                    ### MODIFIED !
+                    tokens_per_tile_eff = max(1, min(self.tokens_per_tile, MAX_VISION_TOKENS // max(1, num_all_tiles)))
+                    special_placeholder = (
+                        f"<image {idx_in_list+1}>{self.image_start_token}"
+                        f"{self.image_token * (num_all_tiles * self.tokens_per_tile)}"
+                        f"{self.image_end_token}"
+                    )
+                    #special_placeholder = f"<image {idx_in_list+1}>{self.image_start_token}{self.image_token * num_all_tiles * self.tokens_per_tile}{self.image_end_token}"
                     unified_frame_list.append(image_inputs)
                     num_of_images_in_this_sample += 1
 
@@ -423,6 +457,8 @@ class Eagle2_5_VLProcessor(ProcessorMixin):
                     )
                     num_all_tiles = video_inputs["pixel_values"].shape[0]
                     image_sizes = video_inputs["image_sizes"]
+                    ### MODIFIED !
+                    tokens_per_tile_eff = max(1, min(self.tokens_per_tile, MAX_VISION_TOKENS // max(1, num_all_tiles)))
                     if timestamps_list is not None and -1 not in timestamps_list:
                         frame_timestamps = timestamps_list[idx_in_list]
                     else:
@@ -456,16 +492,20 @@ class Eagle2_5_VLProcessor(ProcessorMixin):
                             f"Frame {i+1}: {self.image_start_token}{self.image_token * num_of_tiles * self.tokens_per_tile}{self.image_end_token}"
                             for i, num_of_tiles in enumerate(num_of_tiles_each_frame)
                         ]
-
-                    if sampled_fps is not None:
-                        special_placeholder = (
-                            f"The {idx_mapper[idx_in_list]} video sampled with {sampled_fps:.2f} fps: "
-                            + "".join(special_placeholder)
-                        )
-                    else:
-                        special_placeholder = f"The {idx_mapper[idx_in_list]} video: " + "".join(
-                            special_placeholder
-                        )
+                    # MODIFIED !
+                    ########
+                    #if sampled_fps is not None:
+                    #   special_placeholder = (
+                    #        f"The {idx_mapper[idx_in_list]} video sampled with {sampled_fps:.2f} fps: "
+                    #        + "".join(special_placeholder)
+                    #    )
+                    #else:
+                    #    special_placeholder = f"The {idx_mapper[idx_in_list]} video: " + "".join(
+                    #        special_placeholder
+                    #    )
+                    
+                    special_placeholder = "".join(special_placeholder)
+                    ########
                     unified_frame_list.append(video_inputs)
                     num_of_videos_in_this_sample += 1
                 else:
@@ -532,6 +572,13 @@ class Eagle2_5_VLProcessor(ProcessorMixin):
             tokenizer_init_kwargs=self.tokenizer.init_kwargs,
             **kwargs,
         )
+        # --- BEGIN: enforce truncation/padding regardless of caller ---
+        text_kwargs = output_kwargs.setdefault("text_kwargs", {})
+        text_kwargs.setdefault("truncation", True)
+        text_kwargs.setdefault("max_length", getattr(self.tokenizer, "model_max_length", 16384))
+        text_kwargs.setdefault("padding", "longest")
+        # --- END ---
+
 
         if isinstance(text, str):
             text_list = [text]
